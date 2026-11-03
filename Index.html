@@ -1,0 +1,971 @@
+<!DOCTYPE html>
+<html lang="ms">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Misi Jelajah Malaysia: Puzzle Peta Negeri</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- MediaPipe Hands -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <!-- Tone.js for Sound Effects -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js" crossorigin="anonymous"></script>
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;700;900&display=swap');
+        
+        body {
+            font-family: 'Nunito', sans-serif;
+            overflow: hidden;
+            background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%);
+            user-select: none;
+            touch-action: none; /* Prevent scroll on touch */
+        }
+
+        /* Custom Cursor */
+        #custom-cursor {
+            position: fixed;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background-color: rgba(255, 204, 0, 0.7);
+            border: 3px solid #ff9900;
+            pointer-events: none; /* Let clicks pass through */
+            z-index: 9999;
+            transform: translate(-50%, -50%);
+            transition: transform 0.1s ease-out;
+            display: none;
+            box-shadow: 0 0 15px rgba(255, 204, 0, 0.8);
+        }
+
+        #custom-cursor.pinching {
+            background-color: rgba(76, 175, 80, 0.8);
+            border-color: #2e7d32;
+            transform: translate(-50%, -50%) scale(0.7);
+        }
+
+        /* Map and SVGs */
+        .map-container {
+            position: relative;
+            width: 100%;
+            max-width: 900px;
+            height: 500px;
+            margin: 0 auto;
+            background: #ffffff;
+            border-radius: 20px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+            border: 4px solid #38bdf8;
+            overflow: hidden;
+        }
+
+        .state-zone {
+            fill: #e5e7eb;
+            stroke: #9ca3af;
+            stroke-width: 2;
+            transition: all 0.3s;
+        }
+        
+        .state-zone.highlight {
+            fill: #fef08a;
+            stroke: #eab308;
+            filter: drop-shadow(0 0 5px rgba(234, 179, 8, 0.5));
+        }
+
+        .state-zone.correct {
+            fill: #86efac;
+            stroke: #22c55e;
+        }
+
+        /* Special markers for Wilayah Persekutuan */
+        .wp-marker {
+            fill: #f87171;
+            stroke: #b91c1c;
+            stroke-width: 2;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); filter: drop-shadow(0 0 0 rgba(248, 113, 113, 0.7)); }
+            50% { transform: scale(1.2); filter: drop-shadow(0 0 10px rgba(248, 113, 113, 0.9)); }
+            100% { transform: scale(1); filter: drop-shadow(0 0 0 rgba(248, 113, 113, 0.7)); }
+        }
+
+        /* Cards */
+        .draggable-card {
+            position: absolute;
+            padding: 8px 16px;
+            background: linear-gradient(to bottom, #ffffff, #f3f4f6);
+            border: 2px solid #3b82f6;
+            border-radius: 12px;
+            font-weight: 700;
+            color: #1e3a8a;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            cursor: pointer;
+            text-align: center;
+            font-size: 14px;
+            /* Using standard center origin */
+            transform: translate(-50%, -50%);
+            transition: box-shadow 0.2s, transform 0.1s;
+            z-index: 10;
+            white-space: nowrap;
+        }
+
+        .draggable-card.dragging {
+            z-index: 50;
+            box-shadow: 0 15px 25px rgba(0,0,0,0.2);
+            border-color: #f59e0b;
+            transform: translate(-50%, -50%) scale(1.1);
+        }
+
+        .draggable-card.placed {
+            pointer-events: none;
+            border-color: #22c55e;
+            background: #dcfce7;
+            color: #166534;
+            box-shadow: none;
+            z-index: 5;
+            transition: all 0.3s;
+        }
+
+        /* Animations */
+        @keyframes shake {
+            0%, 100% { transform: translate(-50%, -50%) translateX(0); }
+            25% { transform: translate(-50%, -50%) translateX(-10px); }
+            75% { transform: translate(-50%, -50%) translateX(10px); }
+        }
+        
+        .shake-err {
+            animation: shake 0.4s ease-in-out;
+            background: #fee2e2;
+            border-color: #ef4444;
+            color: #991b1b;
+        }
+
+        /* Video Feed Overlay (Mini) */
+        #camera-preview {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            width: 240px;
+            height: 180px;
+            border-radius: 12px;
+            border: 3px solid #10b981;
+            background: #000;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+            z-index: 100;
+            overflow: hidden;
+            transform: scaleX(-1); /* Mirror effect */
+        }
+        
+        #camera-preview video, #camera-preview canvas {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+
+        /* Heart Animation */
+        .heart {
+            color: #ef4444;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            transition: all 0.3s;
+        }
+        .heart.lost {
+            color: #d1d5db; /* gray */
+            transform: scale(0.8);
+        }
+
+        /* Modal / Message Box */
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.5);
+            backdrop-filter: blur(4px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+        .hidden-el {
+            display: none !important;
+        }
+        
+        /* Layout Adjustments */
+        .game-layout {
+            display: grid;
+            grid-template-columns: 1fr;
+            grid-template-rows: auto 1fr;
+            height: 100vh;
+            padding: 10px;
+            gap: 10px;
+        }
+        
+        #cards-dock {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 80%;
+            height: 120px;
+            background: rgba(255,255,255,0.7);
+            border-radius: 20px;
+            border: 2px dashed #93c5fd;
+            pointer-events: none; /* Let cards handle events */
+        }
+    </style>
+</head>
+<body>
+
+    <!-- CUSTOM MESSAGE MODAL -->
+    <div id="custom-alert" class="modal-overlay hidden-el">
+        <div class="bg-white rounded-2xl p-8 max-w-md w-full mx-4 text-center shadow-2xl border-4 border-blue-400">
+            <h2 id="alert-title" class="text-2xl font-black text-gray-800 mb-4">Mesej</h2>
+            <p id="alert-message" class="text-lg text-gray-600 mb-6">Kandungan mesej di sini.</p>
+            <button onclick="closeAlert()" class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-8 rounded-full shadow-lg transform transition hover:scale-105">TUTUP</button>
+        </div>
+    </div>
+
+    <!-- DIGITAL CURSOR -->
+    <div id="custom-cursor"></div>
+
+    <!-- CAMERA PREVIEW (Visible during game) -->
+    <div id="camera-preview" class="hidden-el">
+        <video id="input_video" autoplay playsinline></video>
+        <canvas id="output_canvas"></canvas>
+        <div id="camera-status-text" class="absolute bottom-1 left-1 text-xs text-white bg-black bg-opacity-50 px-2 py-1 rounded" style="transform: scaleX(-1);">Kamera sedang dimulakan...</div>
+    </div>
+
+    <!-- SCREEN A: HOME -->
+    <section id="screen-home" class="min-h-screen flex flex-col items-center justify-center p-4">
+        <div class="bg-white p-10 rounded-3xl shadow-2xl w-full max-w-2xl border-4 border-blue-300 text-center relative overflow-hidden">
+            <!-- Decorative shapes -->
+            <div class="absolute -top-10 -left-10 w-32 h-32 bg-yellow-300 rounded-full mix-blend-multiply filter blur-xl opacity-70"></div>
+            <div class="absolute -bottom-10 -right-10 w-32 h-32 bg-blue-300 rounded-full mix-blend-multiply filter blur-xl opacity-70"></div>
+            
+            <h1 class="text-4xl md:text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-green-500 mb-2 z-10 relative">MISI JELAJAH MALAYSIA</h1>
+            <h2 class="text-2xl font-bold text-gray-600 mb-8 z-10 relative">PUZZLE PETA NEGERI</h2>
+            
+            <div class="space-y-4 mb-8 z-10 relative">
+                <div>
+                    <label class="block text-left font-bold text-gray-700 mb-1">Nama Pemain:</label>
+                    <input type="text" id="input-nama" placeholder="Masukkan nama anda" class="w-full px-4 py-3 rounded-xl border-2 border-gray-300 focus:border-blue-500 focus:outline-none text-lg">
+                </div>
+                <div>
+                    <label class="block text-left font-bold text-gray-700 mb-1">Kelas:</label>
+                    <input type="text" id="input-kelas" placeholder="Cth: 4 Bestari" class="w-full px-4 py-3 rounded-xl border-2 border-gray-300 focus:border-blue-500 focus:outline-none text-lg">
+                </div>
+            </div>
+
+            <div class="flex flex-col sm:flex-row gap-4 justify-center z-10 relative">
+                <button onclick="navTo('screen-instructions')" class="bg-yellow-400 hover:bg-yellow-500 text-gray-900 font-black py-4 px-8 rounded-full shadow-lg transform transition hover:-translate-y-1 text-lg border-b-4 border-yellow-600">CARA BERMAIN</button>
+                <button onclick="checkAndStart()" class="bg-blue-500 hover:bg-blue-600 text-white font-black py-4 px-8 rounded-full shadow-lg transform transition hover:-translate-y-1 text-lg border-b-4 border-blue-700">MULA PERMAINAN</button>
+            </div>
+            
+            <div class="mt-8 z-10 relative flex items-center justify-center gap-2">
+                <span id="cam-status-indicator" class="w-4 h-4 bg-gray-400 rounded-full"></span>
+                <span id="cam-status-label" class="text-gray-600 font-semibold">Kamera Belum Diaktifkan</span>
+            </div>
+        </div>
+    </section>
+
+    <!-- SCREEN B: INSTRUCTIONS -->
+    <section id="screen-instructions" class="min-h-screen flex flex-col items-center justify-center p-4 hidden-el">
+        <div class="bg-white p-8 rounded-3xl shadow-2xl w-full max-w-3xl border-4 border-yellow-300 text-center">
+            <h2 class="text-3xl font-black text-gray-800 mb-6">CARA BERMAIN</h2>
+            
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8 text-left">
+                <div class="bg-blue-50 p-4 rounded-xl border-2 border-blue-200">
+                    <div class="text-3xl mb-2">📷</div>
+                    <h3 class="font-bold text-lg">1. Aktifkan Kamera</h3>
+                    <p class="text-gray-600">Benarkan pelayar web mengakses web camera anda. Pastikan berada di tempat yang terang.</p>
+                </div>
+                <div class="bg-green-50 p-4 rounded-xl border-2 border-green-200">
+                    <div class="text-3xl mb-2">👆</div>
+                    <h3 class="font-bold text-lg">2. Kursor Jari</h3>
+                    <p class="text-gray-600">Angkat tangan. Gunakan <span class="font-bold">hujung jari telunjuk</span> untuk menggerakkan kursor digital di skrin.</p>
+                </div>
+                <div class="bg-yellow-50 p-4 rounded-xl border-2 border-yellow-200">
+                    <div class="text-3xl mb-2">🤏</div>
+                    <h3 class="font-bold text-lg">3. Gesture Pinch (Cubit)</h3>
+                    <p class="text-gray-600">Cantumkan ibu jari dan jari telunjuk untuk <b>mengambil</b> kad negeri. Kekalkan jari bercantum untuk menggerakkannya.</p>
+                </div>
+                <div class="bg-red-50 p-4 rounded-xl border-2 border-red-200">
+                    <div class="text-3xl mb-2">🗺️</div>
+                    <h3 class="font-bold text-lg">4. Padankan Peta</h3>
+                    <p class="text-gray-600">Lepaskan cubitan untuk menjatuhkan kad pada kawasan peta yang betul. Awas, salah letak akan hilang 1 nyawa!</p>
+                </div>
+            </div>
+
+            <div class="flex flex-col sm:flex-row gap-4 justify-center">
+                <button onclick="navTo('screen-home')" class="bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-3 px-8 rounded-full">KEMBALI</button>
+                <button onclick="navTo('screen-game'); initGame();" class="bg-green-500 hover:bg-green-600 text-white font-black py-3 px-8 rounded-full shadow-lg transform transition hover:scale-105">TERUSKAN & AKTIFKAN KAMERA</button>
+            </div>
+        </div>
+    </section>
+
+    <!-- SCREEN C: GAME -->
+    <section id="screen-game" class="game-layout hidden-el">
+        <!-- HUD -->
+        <div class="bg-white rounded-2xl p-4 shadow-md border-2 border-blue-200 flex flex-wrap justify-between items-center z-10">
+            <div class="flex gap-4 items-center">
+                <div class="bg-blue-100 px-4 py-2 rounded-lg">
+                    <span class="text-xs text-blue-600 font-bold block uppercase">Pemain</span>
+                    <span id="hud-nama" class="font-bold text-gray-800">-</span> (<span id="hud-kelas" class="text-sm font-semibold text-gray-600">-</span>)
+                </div>
+                <div class="bg-yellow-100 px-4 py-2 rounded-lg text-center">
+                    <span class="text-xs text-yellow-600 font-bold block uppercase">Skor</span>
+                    <span id="hud-skor" class="font-black text-2xl text-yellow-600">0</span>
+                </div>
+                <div class="bg-green-100 px-4 py-2 rounded-lg text-center">
+                    <span class="text-xs text-green-600 font-bold block uppercase">Masa</span>
+                    <span id="hud-masa" class="font-bold text-lg text-green-700">0s</span>
+                </div>
+            </div>
+            
+            <div class="flex gap-4 items-center">
+                <div class="text-center">
+                    <span class="text-xs text-gray-500 font-bold block uppercase">Nyawa</span>
+                    <div id="hud-nyawa" class="text-2xl flex gap-1">
+                        <span class="heart">❤️</span>
+                        <span class="heart">❤️</span>
+                        <span class="heart">❤️</span>
+                    </div>
+                </div>
+                <div class="bg-purple-100 px-4 py-2 rounded-lg text-center">
+                    <span class="text-xs text-purple-600 font-bold block uppercase">Kemajuan</span>
+                    <span class="font-bold text-lg text-purple-700"><span id="hud-progress">0</span>/16</span>
+                </div>
+                <button id="btn-music" onclick="toggleMusic()" class="bg-gray-200 p-2 rounded-full shadow hover:bg-gray-300 text-xl" title="BGM On/Off">🔇</button>
+            </div>
+        </div>
+
+        <!-- Main Game Area -->
+        <div class="relative w-full h-full flex flex-col items-center">
+            
+            <!-- SVG Map Container -->
+            <div class="map-container relative" id="map-area">
+                <!-- Simplified Abstract SVG Map of Malaysia for Gameplay -->
+                <svg viewBox="0 0 1000 500" class="w-full h-full" id="malaysia-svg">
+                    <!-- Semenanjung Malaysia (West) -->
+                    <g id="semenanjung">
+                        <!-- Perlis -->
+                        <path id="zone-perlis" data-state="Perlis" class="state-zone" d="M 230,70 L 250,70 L 250,90 L 230,90 Z" />
+                        <!-- Kedah -->
+                        <path id="zone-kedah" data-state="Kedah" class="state-zone" d="M 220,90 L 280,90 L 290,150 L 220,130 Z" />
+                        <!-- Pulau Pinang (Small island/coast) -->
+                        <circle id="zone-pulaupinang" data-state="Pulau Pinang" class="state-zone wp-marker" cx="210" cy="140" r="12" />
+                        <!-- Perak -->
+                        <path id="zone-perak" data-state="Perak" class="state-zone" d="M 220,130 L 290,150 L 300,230 L 230,260 L 210,180 Z" />
+                        <!-- Kelantan -->
+                        <path id="zone-kelantan" data-state="Kelantan" class="state-zone" d="M 280,90 L 350,110 L 340,190 L 290,150 Z" />
+                        <!-- Terengganu -->
+                        <path id="zone-terengganu" data-state="Terengganu" class="state-zone" d="M 350,110 L 400,160 L 380,210 L 340,190 Z" />
+                        <!-- Pahang (Large) -->
+                        <path id="zone-pahang" data-state="Pahang" class="state-zone" d="M 300,230 L 340,190 L 380,210 L 370,280 L 330,300 L 290,270 Z" />
+                        <!-- Selangor -->
+                        <path id="zone-selangor" data-state="Selangor" class="state-zone" d="M 230,260 L 300,230 L 290,270 L 250,300 Z" />
+                        <!-- Kuala Lumpur -->
+                        <circle id="zone-kl" data-state="Kuala Lumpur" class="state-zone wp-marker" cx="265" cy="275" r="8" />
+                        <!-- Putrajaya -->
+                        <circle id="zone-putrajaya" data-state="Putrajaya" class="state-zone wp-marker" cx="260" cy="290" r="6" />
+                        <!-- Negeri Sembilan -->
+                        <path id="zone-nsembilan" data-state="Negeri Sembilan" class="state-zone" d="M 250,300 L 290,270 L 310,310 L 270,330 Z" />
+                        <!-- Melaka -->
+                        <path id="zone-melaka" data-state="Melaka" class="state-zone" d="M 270,330 L 310,310 L 320,340 L 290,350 Z" />
+                        <!-- Johor -->
+                        <path id="zone-johor" data-state="Johor" class="state-zone" d="M 310,310 L 330,300 L 370,280 L 420,340 L 320,380 L 320,340 Z" />
+                    </g>
+                    
+                    <!-- Borneo (East Malaysia) -->
+                    <g id="borneo">
+                        <!-- Sarawak (Large) -->
+                        <path id="zone-sarawak" data-state="Sarawak" class="state-zone" d="M 480,300 L 600,220 L 720,200 L 800,240 L 700,320 L 550,350 Z" />
+                        <!-- Labuan -->
+                        <circle id="zone-labuan" data-state="Labuan" class="state-zone wp-marker" cx="720" cy="180" r="8" />
+                        <!-- Sabah -->
+                        <path id="zone-sabah" data-state="Sabah" class="state-zone" d="M 720,200 L 850,150 L 920,220 L 800,240 Z" />
+                    </g>
+                    
+                    <!-- Decorative Map Elements -->
+                    <text x="50" y="50" font-family="Nunito" font-size="20" font-weight="bold" fill="#64748b">Zon Geografi (Simulasi)</text>
+                    <!-- Legends for special markers -->
+                    <circle cx="50" cy="80" r="6" class="wp-marker"/>
+                    <text x="65" y="85" font-family="Nunito" font-size="12" fill="#64748b">= Wilayah Persekutuan / Titik Kecil</text>
+                </svg>
+            </div>
+
+            <!-- Cards Docking Area -->
+            <div id="cards-dock"></div>
+            
+            <!-- Container for absolute cards -->
+            <div id="cards-container" class="absolute inset-0 pointer-events-none w-full h-full"></div>
+            
+        </div>
+    </section>
+
+    <!-- SCREEN D: GAME OVER -->
+    <section id="screen-gameover" class="min-h-screen flex flex-col items-center justify-center p-4 hidden-el">
+        <div class="bg-white p-10 rounded-3xl shadow-2xl w-full max-w-2xl border-4 border-purple-400 text-center">
+            
+            <h1 id="end-title" class="text-4xl md:text-5xl font-black mb-4 uppercase">PERMAINAN TAMAT</h1>
+            <p id="end-message" class="text-xl text-gray-600 mb-8 font-semibold">Sila tunggu...</p>
+            
+            <div class="bg-gray-50 rounded-2xl p-6 mb-8 border-2 border-gray-200">
+                <div class="grid grid-cols-2 gap-4 text-left max-w-sm mx-auto">
+                    <div class="font-bold text-gray-500">Nama:</div>
+                    <div id="end-nama" class="font-black text-gray-800 text-right">-</div>
+                    
+                    <div class="font-bold text-gray-500">Kelas:</div>
+                    <div id="end-kelas" class="font-black text-gray-800 text-right">-</div>
+                    
+                    <div class="font-bold text-gray-500">Skor Akhir:</div>
+                    <div id="end-skor" class="font-black text-yellow-600 text-right text-2xl">0</div>
+                    
+                    <div class="font-bold text-gray-500">Masa:</div>
+                    <div id="end-masa" class="font-black text-green-600 text-right">0s</div>
+                    
+                    <div class="font-bold text-gray-500">Baki Nyawa:</div>
+                    <div id="end-nyawa" class="font-black text-red-500 text-right">0</div>
+                </div>
+            </div>
+            
+            <div id="save-status" class="mb-6 font-bold text-blue-600 p-2 bg-blue-50 rounded">Menyimpan rekod ke pangkalan data...</div>
+
+            <div class="flex flex-col sm:flex-row gap-4 justify-center">
+                <button onclick="navTo('screen-home'); location.reload();" class="bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-3 px-8 rounded-full">KEMBALI HALAMAN UTAMA</button>
+                <button onclick="navTo('screen-game'); initGame();" class="bg-purple-500 hover:bg-purple-600 text-white font-black py-3 px-8 rounded-full shadow-lg transform transition hover:scale-105">MAIN SEMULA</button>
+            </div>
+        </div>
+    </section>
+
+    <!-- SCRIPTS -->
+    <script>
+        // --- 1. GAME STATE ---
+        const statesData = [
+            "Perlis", "Kedah", "Pulau Pinang", "Perak", "Selangor", "Negeri Sembilan", 
+            "Melaka", "Johor", "Pahang", "Terengganu", "Kelantan", "Sabah", "Sarawak",
+            "Kuala Lumpur", "Putrajaya", "Labuan"
+        ];
+        
+        let gameState = {
+            nama: "",
+            kelas: "",
+            score: 0,
+            lives: 3,
+            time: 0,
+            matchedCount: 0,
+            isPlaying: false,
+            timerInterval: null
+        };
+
+        // UI Elements
+        const cursorEl = document.getElementById('custom-cursor');
+        const cardsContainer = document.getElementById('cards-container');
+        
+        // MediaPipe and Interaction Variables
+        let camera, hands;
+        let isPinching = false;
+        let draggedCard = null;
+        let mouseX = 0, mouseY = 0; // For fallback/testing
+        let isCameraActive = false;
+
+        // Sound Synthesis (Tone.js)
+        let synth, bgmPlayer, musicEnabled = false;
+
+        // --- 2. INITIALIZATION & NAVIGATION ---
+        
+        function initAudio() {
+            if(!synth) {
+                synth = new Tone.PolySynth(Tone.Synth).toDestination();
+                synth.volume.value = -10;
+            }
+        }
+
+        function playSound(type) {
+            if(!synth || !musicEnabled) return;
+            Tone.start();
+            if (type === 'correct') {
+                synth.triggerAttackRelease(["C5", "E5", "G5"], "8n");
+            } else if (type === 'wrong') {
+                synth.triggerAttackRelease(["C3", "D#3"], "8n");
+            } else if (type === 'win') {
+                synth.triggerAttackRelease(["C4", "E4", "G4", "C5", "E5"], "2n");
+            } else if (type === 'over') {
+                synth.triggerAttackRelease(["G3", "D#3", "C3"], "2n");
+            } else if (type === 'grab') {
+                synth.triggerAttackRelease("C6", "32n");
+            }
+        }
+
+        function toggleMusic() {
+            musicEnabled = !musicEnabled;
+            document.getElementById('btn-music').innerText = musicEnabled ? "🔊" : "🔇";
+            if (musicEnabled) {
+                Tone.start();
+                initAudio();
+            }
+        }
+
+        function showAlert(title, message) {
+            document.getElementById('alert-title').innerText = title;
+            document.getElementById('alert-message').innerText = message;
+            document.getElementById('custom-alert').classList.remove('hidden-el');
+        }
+
+        function closeAlert() {
+            document.getElementById('custom-alert').classList.add('hidden-el');
+        }
+
+        function navTo(screenId) {
+            ['screen-home', 'screen-instructions', 'screen-game', 'screen-gameover'].forEach(id => {
+                document.getElementById(id).classList.add('hidden-el');
+            });
+            document.getElementById(screenId).classList.remove('hidden-el');
+        }
+
+        function checkAndStart() {
+            const nama = document.getElementById('input-nama').value.trim();
+            const kelas = document.getElementById('input-kelas').value.trim();
+            if (nama === "" || kelas === "") {
+                showAlert("Perhatian", "Sila masukkan Nama dan Kelas anda terlebih dahulu.");
+                return;
+            }
+            gameState.nama = nama;
+            gameState.kelas = kelas;
+            navTo('screen-instructions');
+        }
+
+        // --- 3. MEDIAPIPE CAMERA CONTROL ---
+
+        async function setupCameraControl() {
+            if (isCameraActive) return; // Prevent double init
+            
+            const videoElement = document.getElementById('input_video');
+            const canvasElement = document.getElementById('output_canvas');
+            const canvasCtx = canvasElement.getContext('2d');
+            const statusLabel = document.getElementById('cam-status-label');
+            const statusIndicator = document.getElementById('cam-status-indicator');
+            const camStatusText = document.getElementById('camera-status-text');
+            
+            statusLabel.innerText = "Memulakan Kamera...";
+            statusIndicator.className = "w-4 h-4 bg-yellow-400 rounded-full animate-pulse";
+
+            hands = new Hands({locateFile: (file) => {
+                return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+            }});
+
+            hands.setOptions({
+                maxNumHands: 1,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.7,
+                minTrackingConfidence: 0.7
+            });
+
+            hands.onResults((results) => {
+                if(!isCameraActive) return;
+                
+                // Draw hand skeleton on mini preview
+                canvasCtx.save();
+                canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+                canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+                if (results.multiHandLandmarks) {
+                    for (const landmarks of results.multiHandLandmarks) {
+                        drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 2});
+                        drawLandmarks(canvasCtx, landmarks, {color: '#FF0000', lineWidth: 1, radius: 2});
+                        
+                        // Process interaction
+                        handleHandInteraction(landmarks);
+                    }
+                } else {
+                    // Hide cursor if no hand
+                    if(cursorEl.style.display !== 'none') {
+                        cursorEl.style.display = 'none';
+                        if(isPinching) triggerDrop();
+                    }
+                }
+                canvasCtx.restore();
+            });
+
+            camera = new Camera(videoElement, {
+                onFrame: async () => {
+                    await hands.send({image: videoElement});
+                },
+                width: 640,
+                height: 480
+            });
+
+            try {
+                await camera.start();
+                isCameraActive = true;
+                statusLabel.innerText = "Kamera Aktif";
+                statusIndicator.className = "w-4 h-4 bg-green-500 rounded-full";
+                camStatusText.innerText = "Kamera Berfungsi";
+                document.getElementById('camera-preview').classList.remove('hidden-el');
+                cursorEl.style.display = 'block';
+            } catch (err) {
+                console.error(err);
+                showAlert("Ralat Kamera", "Kamera tidak dapat diakses. Pastikan anda memberikan kebenaran. Anda masih boleh bermain menggunakan tetikus.");
+                statusLabel.innerText = "Kamera Gagal";
+                statusIndicator.className = "w-4 h-4 bg-red-500 rounded-full";
+                camStatusText.innerText = "Kamera Gagal";
+                // Fallback to mouse setup
+                setupMouseFallback();
+            }
+        }
+
+        // Mapping screen coords
+        function handleHandInteraction(landmarks) {
+            // Index tip is landmark 8, thumb tip is landmark 4
+            const indexTip = landmarks[8];
+            const thumbTip = landmarks[4];
+
+            // Map coordinates. X is mirrored!
+            const screenW = window.innerWidth;
+            const screenH = window.innerHeight;
+            
+            const rawX = 1 - indexTip.x; // Mirror
+            const rawY = indexTip.y;
+            
+            // Smoothing/Bounding to make it easier to reach edges
+            const cursorX = Math.max(0, Math.min(screenW, (rawX - 0.2) * 1.5 * screenW));
+            const cursorY = Math.max(0, Math.min(screenH, (rawY - 0.2) * 1.5 * screenH));
+            
+            mouseX = cursorX;
+            mouseY = cursorY;
+
+            updateCursorDOM(cursorX, cursorY);
+
+            // Calculate distance for pinch
+            const distance = Math.hypot(indexTip.x - thumbTip.x, indexTip.y - thumbTip.y);
+            const pinchThreshold = 0.05; // 5% of screen relative
+
+            if (distance < pinchThreshold) {
+                if (!isPinching) {
+                    triggerGrab(cursorX, cursorY);
+                }
+                isPinching = true;
+                cursorEl.classList.add('pinching');
+                
+                if (draggedCard) {
+                    moveCard(cursorX, cursorY);
+                }
+            } else {
+                if (isPinching) {
+                    triggerDrop(cursorX, cursorY);
+                }
+                isPinching = false;
+                cursorEl.classList.remove('pinching');
+            }
+        }
+
+        function updateCursorDOM(x, y) {
+            cursorEl.style.display = 'block';
+            cursorEl.style.left = x + 'px';
+            cursorEl.style.top = y + 'px';
+        }
+
+        // --- 4. GAME LOGIC & PHYSICS ---
+
+        function initGame() {
+            // Setup Audio context if not yet done
+            if(musicEnabled) Tone.start();
+            initAudio();
+            
+            // Start Camera
+            setupCameraControl();
+
+            // Reset Game State
+            gameState.score = 0;
+            gameState.lives = 3;
+            gameState.time = 0;
+            gameState.matchedCount = 0;
+            gameState.isPlaying = true;
+            
+            // Reset UI
+            document.getElementById('hud-nama').innerText = gameState.nama;
+            document.getElementById('hud-kelas').innerText = gameState.kelas;
+            updateHUD();
+            
+            // Start Timer
+            if(gameState.timerInterval) clearInterval(gameState.timerInterval);
+            gameState.timerInterval = setInterval(() => {
+                if(gameState.isPlaying) {
+                    gameState.time++;
+                    document.getElementById('hud-masa').innerText = gameState.time + 's';
+                }
+            }, 1000);
+
+            // Generate Cards
+            cardsContainer.innerHTML = '';
+            
+            // Reset Zones
+            document.querySelectorAll('.state-zone').forEach(z => {
+                z.classList.remove('correct', 'highlight');
+            });
+
+            // Create randomized cards
+            let shuffledStates = [...statesData].sort(() => Math.random() - 0.5);
+            const screenW = window.innerWidth;
+            const screenH = window.innerHeight;
+            
+            shuffledStates.forEach((stateName, index) => {
+                const card = document.createElement('div');
+                card.className = 'draggable-card pointer-events-auto'; // Enable pointer events for testing
+                card.innerText = stateName;
+                card.dataset.state = stateName;
+                
+                // Random position at the bottom half area
+                // Using 20% to 80% width, and 70% to 90% height
+                const randX = (0.1 + Math.random() * 0.8) * screenW;
+                const randY = (0.7 + Math.random() * 0.2) * screenH;
+                
+                card.style.left = `${randX}px`;
+                card.style.top = `${randY}px`;
+                card.dataset.origX = randX;
+                card.dataset.origY = randY;
+                
+                // Mouse Fallback Support for Accessibility
+                card.addEventListener('mousedown', (e) => mouseGrab(e, card));
+                
+                cardsContainer.appendChild(card);
+            });
+            
+            // Global mouse events for fallback
+            document.addEventListener('mousemove', mouseMove);
+            document.addEventListener('mouseup', mouseDrop);
+        }
+
+        // --- Interaction Logic ---
+
+        function triggerGrab(x, y) {
+            // Find card at position
+            // Temporarily hide cursor to not interfere with elementFromPoint
+            cursorEl.style.display = 'none';
+            const elements = document.elementsFromPoint(x, y);
+            cursorEl.style.display = 'block';
+            
+            for (let el of elements) {
+                if (el.classList.contains('draggable-card') && !el.classList.contains('placed')) {
+                    draggedCard = el;
+                    draggedCard.classList.add('dragging');
+                    playSound('grab');
+                    break;
+                }
+            }
+        }
+
+        function moveCard(x, y) {
+            if (draggedCard) {
+                draggedCard.style.left = x + 'px';
+                draggedCard.style.top = y + 'px';
+                
+                // Highlight zone under cursor
+                cursorEl.style.display = 'none';
+                draggedCard.style.display = 'none'; // hide card temporarily to check zone
+                const elements = document.elementsFromPoint(x, y);
+                draggedCard.style.display = '';
+                cursorEl.style.display = 'block';
+                
+                document.querySelectorAll('.state-zone').forEach(z => z.classList.remove('highlight'));
+                
+                for (let el of elements) {
+                    if (el.classList.contains('state-zone')) {
+                        el.classList.add('highlight');
+                        break;
+                    }
+                }
+            }
+        }
+
+        function triggerDrop(x = mouseX, y = mouseY) {
+            if (!draggedCard) return;
+            
+            const cardState = draggedCard.dataset.state;
+            let droppedOnCorrectZone = false;
+            
+            // Check intersection
+            cursorEl.style.display = 'none';
+            draggedCard.style.display = 'none';
+            const elements = document.elementsFromPoint(x, y);
+            draggedCard.style.display = '';
+            cursorEl.style.display = 'block';
+            
+            document.querySelectorAll('.state-zone').forEach(z => z.classList.remove('highlight'));
+            
+            let matchedZone = null;
+            for (let el of elements) {
+                if (el.classList.contains('state-zone')) {
+                    if (el.dataset.state === cardState) {
+                        droppedOnCorrectZone = true;
+                        matchedZone = el;
+                    }
+                    break;
+                }
+            }
+
+            if (droppedOnCorrectZone) {
+                // Correct!
+                playSound('correct');
+                draggedCard.classList.remove('dragging');
+                draggedCard.classList.add('placed');
+                
+                // Snap to zone center (approximate using bounding box)
+                const rect = matchedZone.getBoundingClientRect();
+                draggedCard.style.left = (rect.left + rect.width/2) + 'px';
+                draggedCard.style.top = (rect.top + rect.height/2) + 'px';
+                
+                matchedZone.classList.add('correct');
+                
+                gameState.score += 10;
+                gameState.matchedCount++;
+                updateHUD();
+                
+                checkGameEnd();
+            } else {
+                // Wrong!
+                playSound('wrong');
+                draggedCard.classList.remove('dragging');
+                draggedCard.classList.add('shake-err');
+                
+                // Return to original position
+                setTimeout(() => {
+                    if(draggedCard) {
+                        draggedCard.style.left = draggedCard.dataset.origX + 'px';
+                        draggedCard.style.top = draggedCard.dataset.origY + 'px';
+                        draggedCard.classList.remove('shake-err');
+                    }
+                }, 400);
+                
+                gameState.lives--;
+                updateHUD();
+                
+                if (gameState.lives <= 0) {
+                    endGame(false);
+                }
+            }
+            
+            draggedCard = null;
+        }
+
+        // Mouse Fallback Handlers
+        let isMouseDown = false;
+        function setupMouseFallback() {
+            cursorEl.style.display = 'none'; // Hide digital cursor if using mouse natively
+        }
+        function mouseGrab(e, card) {
+            if(isCameraActive) return; // Ignore if camera is active
+            if(card.classList.contains('placed')) return;
+            isMouseDown = true;
+            draggedCard = card;
+            draggedCard.classList.add('dragging');
+            playSound('grab');
+        }
+        function mouseMove(e) {
+            if(isCameraActive) return;
+            if(isMouseDown && draggedCard) {
+                moveCard(e.clientX, e.clientY);
+            }
+        }
+        function mouseDrop(e) {
+            if(isCameraActive) return;
+            if(isMouseDown && draggedCard) {
+                triggerDrop(e.clientX, e.clientY);
+                isMouseDown = false;
+            }
+        }
+
+        // --- 5. UI UPDATES & GAME OVER ---
+
+        function updateHUD() {
+            document.getElementById('hud-skor').innerText = gameState.score;
+            document.getElementById('hud-progress').innerText = gameState.matchedCount;
+            
+            // Update Hearts
+            const hearts = document.querySelectorAll('.heart');
+            hearts.forEach((h, index) => {
+                if (index < gameState.lives) {
+                    h.classList.remove('lost');
+                    h.innerText = '❤️';
+                } else {
+                    h.classList.add('lost');
+                    h.innerText = '🤍';
+                }
+            });
+        }
+
+        function checkGameEnd() {
+            if (gameState.matchedCount >= 16) {
+                endGame(true);
+            }
+        }
+
+        function endGame(isWin) {
+            gameState.isPlaying = false;
+            clearInterval(gameState.timerInterval);
+            
+            if (isWin) {
+                playSound('win');
+                document.getElementById('end-title').innerText = "TAHNIAH! ANDA PAKAR PETA MALAYSIA!";
+                document.getElementById('end-title').className = "text-4xl md:text-5xl font-black mb-4 uppercase text-green-500";
+            } else {
+                playSound('over');
+                document.getElementById('end-title').innerText = "PERMAINAN TAMAT!";
+                document.getElementById('end-title').className = "text-4xl md:text-5xl font-black mb-4 uppercase text-red-500";
+                document.getElementById('end-message').innerText = "Cuba lagi untuk meningkatkan skor anda.";
+            }
+
+            document.getElementById('end-nama').innerText = gameState.nama;
+            document.getElementById('end-kelas').innerText = gameState.kelas;
+            document.getElementById('end-skor').innerText = gameState.score;
+            document.getElementById('end-masa').innerText = gameState.time + 's';
+            document.getElementById('end-nyawa').innerText = gameState.lives;
+            
+            navTo('screen-gameover');
+            
+            // Save to Google Sheets
+            saveToSheets();
+        }
+
+        function saveToSheets() {
+            const data = {
+                nama: gameState.nama,
+                kelas: gameState.kelas,
+                score: gameState.score,
+                masa: gameState.time,
+                nyawa: gameState.lives
+            };
+
+            const statusEl = document.getElementById('save-status');
+            statusEl.innerText = "Menyimpan rekod ke Google Sheets...";
+            statusEl.className = "mb-6 font-bold text-blue-600 p-2 bg-blue-50 rounded animate-pulse";
+
+            // Determine if running in Google Apps Script or Local
+            if (typeof google !== 'undefined' && google.script && google.script.run) {
+                google.script.run
+                    .withSuccessHandler(function(response) {
+                        statusEl.className = "mb-6 font-bold p-2 rounded " + (response.success ? "text-green-700 bg-green-100" : "text-red-700 bg-red-100");
+                        statusEl.innerText = response.message;
+                    })
+                    .withFailureHandler(function(error) {
+                        statusEl.className = "mb-6 font-bold text-red-700 p-2 bg-red-100 rounded";
+                        statusEl.innerText = "Ralat pelayan: " + error;
+                    })
+                    .saveRecord(data);
+            } else {
+                // Mock save for local testing out of GAS environment
+                setTimeout(() => {
+                    console.log("Mock Save Data:", data);
+                    statusEl.className = "mb-6 font-bold text-green-700 p-2 bg-green-100 rounded";
+                    statusEl.innerText = "Simulasi Rekod disimpan! (Sistem beroperasi di luar Google Apps Script)";
+                }, 1500);
+            }
+        }
+        
+    </script>
+</body>
+</html>
